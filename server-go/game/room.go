@@ -77,10 +77,8 @@ func (r *Room) initWorld() {
 
 func (r *Room) spawnRandomFood() {
 	id := fmt.Sprintf("food-%d-%d", time.Now().UnixNano(), r.rnd.Intn(10000))
-	angle := r.rnd.Float64() * math.Pi * 2
-	dist := r.rnd.Float64() * (r.worldRadius - 2.0)
-	x := math.Round(math.Cos(angle) * dist)
-	y := math.Round(math.Sin(angle) * dist)
+	x := math.Round((r.rnd.Float64() - 0.5) * 1440.0)
+	y := math.Round((r.rnd.Float64() - 0.5) * 1440.0)
 
 	foodType := FoodBerry
 	val := 10
@@ -479,13 +477,25 @@ func (r *Room) Tick() {
 		c.X += dx * speed
 		c.Y += dy * speed
 
-		// World boundary collision check
-		distFromCenter := math.Hypot(c.X, c.Y)
-		if distFromCenter > r.worldRadius {
-			c.X = c.PrevX
-			c.Y = c.PrevY
-			c.AngleDeg = math.Mod(c.AngleDeg+180.0, 360.0)
-			c.TargetAngleDeg = c.AngleDeg
+		// World boundary toroidal wrap check for 1500x1500 grid
+		// Smooth appearance on opposite side preserving angle, velocity vector, speed, and rotation
+		halfWorld := 750.0
+		worldSize := 1500.0
+
+		if c.X > halfWorld {
+			c.X -= worldSize
+			c.PrevX -= worldSize
+		} else if c.X < -halfWorld {
+			c.X += worldSize
+			c.PrevX += worldSize
+		}
+
+		if c.Y > halfWorld {
+			c.Y -= worldSize
+			c.PrevY -= worldSize
+		} else if c.Y < -halfWorld {
+			c.Y += worldSize
+			c.PrevY += worldSize
 		}
 
 		c.StepsCount++

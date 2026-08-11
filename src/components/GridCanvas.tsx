@@ -404,6 +404,20 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
         ctx.fill();
       }
 
+      // Render 1500x1500 Field Arena Border Frame
+      const arenaTopLeft = gridToScreen(-750, -750);
+      const arenaBottomRight = gridToScreen(750, 750);
+      const arenaW = arenaBottomRight.x - arenaTopLeft.x;
+      const arenaH = arenaBottomRight.y - arenaTopLeft.y;
+
+      ctx.save();
+      ctx.strokeStyle = isGameTheme ? '#ec4899' : (gridTheme === 'blueprint' ? '#38bdf8' : '#3b82f6');
+      ctx.lineWidth = Math.max(2, 3.5 * zoom);
+      ctx.shadowBlur = 12 * zoom;
+      ctx.shadowColor = ctx.strokeStyle;
+      ctx.strokeRect(arenaTopLeft.x, arenaTopLeft.y, arenaW, arenaH);
+      ctx.restore();
+
       // Render Food on nodes
       const nowTime = Date.now();
       foods.forEach((food) => {
@@ -486,8 +500,25 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
       // Render Creatures with Physics Elements
       creatures.forEach((creature) => {
         const p = creature.moveProgress;
-        const currentX = creature.prevX + (creature.x - creature.prevX) * p;
-        const currentY = creature.prevY + (creature.y - creature.prevY) * p;
+
+        let dx = creature.x - creature.prevX;
+        if (dx > 750) dx -= 1500;
+        if (dx < -750) dx += 1500;
+
+        let dy = creature.y - creature.prevY;
+        if (dy > 750) dy -= 1500;
+        if (dy < -750) dy += 1500;
+
+        const rawX = creature.prevX + dx * p;
+        const rawY = creature.prevY + dy * p;
+
+        let currentX = rawX;
+        if (currentX > 750) currentX -= 1500;
+        if (currentX < -750) currentX += 1500;
+
+        let currentY = rawY;
+        if (currentY > 750) currentY -= 1500;
+        if (currentY < -750) currentY += 1500;
 
         // Interpolate angle with shortest path normalization
         let angleDiff = creature.angleDeg - creature.prevAngleDeg;
@@ -499,11 +530,25 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
         const baseHeadAngle = determineCreatureHeadAngle(creature.elements);
         const rotationDelta = currentAngle - baseHeadAngle;
 
-        const centerPos = gridToScreen(currentX, currentY);
+        const isSelected = creature.id === selectedCreatureId;
 
-        ctx.save();
-        ctx.translate(centerPos.x, centerPos.y);
-        ctx.rotate((rotationDelta * Math.PI) / 180);
+        // Toroidal wrapper offsets for seamless boundary transition on 1500x1500 grid
+        const wrapOffsets: { x: number; y: number }[] = [{ x: 0, y: 0 }];
+        if (currentX > 700) wrapOffsets.push({ x: -1500, y: 0 });
+        if (currentX < -700) wrapOffsets.push({ x: 1500, y: 0 });
+        if (currentY > 700) wrapOffsets.push({ x: 0, y: -1500 });
+        if (currentY < -700) wrapOffsets.push({ x: 0, y: 1500 });
+        if (currentX > 700 && currentY > 700) wrapOffsets.push({ x: -1500, y: -1500 });
+        if (currentX > 700 && currentY < -700) wrapOffsets.push({ x: -1500, y: 1500 });
+        if (currentX < -700 && currentY > 700) wrapOffsets.push({ x: 1500, y: -1500 });
+        if (currentX < -700 && currentY < -700) wrapOffsets.push({ x: 1500, y: 1500 });
+
+        wrapOffsets.forEach((off) => {
+          const centerPos = gridToScreen(currentX + off.x, currentY + off.y);
+
+          ctx.save();
+          ctx.translate(centerPos.x, centerPos.y);
+          ctx.rotate((rotationDelta * Math.PI) / 180);
 
         const isSelected = creature.id === selectedCreatureId;
 
@@ -518,14 +563,20 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
           ctx.setLineDash([]);
         }
 
-        const isMuscleContracted = creature.muscleStep % 2 === 1;
+        // Вычисляем точные иерархические сгибы всех шарниров и плеч чудика (плавная анимация сгибов ребер)
+        const animStep = creature.state === 'moving' || creature.moveProgress < 1
+          ? creature.muscleStep + creature.moveProgress
+          : creature.muscleStep + (Math.sin(Date.now() / 350) * 0.5 + 0.5);
+
+        const currentContractFactor = 0.5 - 0.5 * Math.cos(animStep * Math.PI);
+        const isMuscleContracted = currentContractFactor > 0.05;
 
         // Проверяем реальное согнутое состояние мышц на левой и правой стороне
         const isLeftMuscleFlexed = creature.elements.some((m) => {
           if (!m.type.includes('left')) return false;
           if (m.type === 'muscle-left') return isMuscleContracted;
           if (m.type === 'muscle-random-left') {
-            return getRandomMuscleState(m, creature.muscleStep).isFlexed;
+            return getRandomMuscleState(m, animStep).isFlexed;
           }
           return false;
         });
@@ -534,15 +585,11 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
           if (!m.type.includes('right')) return false;
           if (m.type === 'muscle-right') return isMuscleContracted;
           if (m.type === 'muscle-random-right') {
-            return getRandomMuscleState(m, creature.muscleStep).isFlexed;
+            return getRandomMuscleState(m, animStep).isFlexed;
           }
           return false;
         });
 
-        // Вычисляем точные иерархические сгибы всех шарниров и плеч чудика (плавная анимация сгибов ребер)
-        const animStep = creature.state === 'moving' || creature.moveProgress < 1
-          ? creature.muscleStep + creature.moveProgress
-          : creature.muscleStep + (Math.sin(Date.now() / 400) * 0.3 + 0.3);
         const bentMap = calculateKinematicBends(creature.elements, animStep);
 
         // Render each physical element
@@ -711,12 +758,13 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
               isFlexed = isMuscleContracted;
               isJustFlexed = isMuscleContracted;
             } else {
-              const mState = getRandomMuscleState(el, creature.muscleStep);
+              const mState = getRandomMuscleState(el, animStep);
               isFlexed = mState.isFlexed;
               isJustFlexed = mState.justFlexed;
             }
 
-            const flex = isFlexed ? 0.6 : 1.2;
+            const muscleFlexFactor = isRandom ? (isFlexed ? currentContractFactor : 0) : currentContractFactor;
+            const flex = 1.2 - 0.6 * muscleFlexFactor;
             const sign = isLeft ? -1 : 1;
 
             ctx.beginPath();
@@ -814,6 +862,7 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
         ctx.fillRect(-barW / 2, -14 * zoom, barW * energyPct, barH);
 
         ctx.restore();
+        });
       });
 
       // Render Ghost Preview during Placement Mode

@@ -94,12 +94,13 @@ export interface RandomMuscleState {
 
 // Расчет состояния случайной мышцы (сгиб только по вероятности)
 export function getRandomMuscleState(el: CreatureElement, step: number): RandomMuscleState {
-  if (step <= 0) {
+  const intStep = Math.abs(Math.floor(step));
+  if (intStep <= 0) {
     return { isFlexed: false, justFlexed: false, justUnflexed: false };
   }
 
-  const isTriggeredNow = isRandomMuscleTriggered(el, step);
-  const isTriggeredPrev = isRandomMuscleTriggered(el, step - 1);
+  const isTriggeredNow = isRandomMuscleTriggered(el, intStep);
+  const isTriggeredPrev = isRandomMuscleTriggered(el, intStep - 1);
 
   return {
     isFlexed: isTriggeredNow,
@@ -124,7 +125,8 @@ export function determineCreatureHeadAngle(elements: CreatureElement[]): number 
 
 // Вычисление физических сил, момента инерции, масс и угла разворота
 export function calculatePhysicsForces(elements: CreatureElement[], muscleActiveStep: number = 0): PhysicsForces {
-  const isMuscleContracted = muscleActiveStep % 2 === 1;
+  const contractFactor = 0.5 - 0.5 * Math.cos(muscleActiveStep * Math.PI);
+  const isMuscleContracted = contractFactor > 0.05;
 
   const joints: { id: string; x: number; y: number }[] = [];
   const edgeElements: CreatureElement[] = [];
@@ -229,18 +231,18 @@ export function calculatePhysicsForces(elements: CreatureElement[], muscleActive
       let providesMotion = false;
 
       if (el.type === 'muscle-left' || el.type === 'muscle-right') {
-        providesTorque = isMuscleContracted;
+        providesTorque = contractFactor > 0.01;
         providesMotion = true;
       } else if (el.type === 'muscle-random-left' || el.type === 'muscle-random-right') {
         const mState = getRandomMuscleState(el, muscleActiveStep);
-        providesTorque = mState.justFlexed;
+        providesTorque = mState.isFlexed && contractFactor > 0.01;
         providesMotion = mState.justFlexed || mState.justUnflexed;
       }
 
       if (providesTorque) {
         // Плечо рычага мышцы вдоль продольной оси
         const muscleArm = 1.0 + 0.4 * Math.abs(el.relY - j.y);
-        const muscleForce = 1.5 * muscleArm;
+        const muscleForce = 1.5 * muscleArm * contractFactor;
 
         if (el.type.includes('left')) {
           activeLeftMuscles += muscleForce;
@@ -266,8 +268,8 @@ export function calculatePhysicsForces(elements: CreatureElement[], muscleActive
       rightEdgeMass: jRightMass,
       leftTorquePotential: jLeftTorquePotential,
       rightTorquePotential: jRightTorquePotential,
-      activeLeftMuscles: Math.round(activeLeftMuscles),
-      activeRightMuscles: Math.round(activeRightMuscles),
+      activeLeftMuscles: Math.round(activeLeftMuscles * 10) / 10,
+      activeRightMuscles: Math.round(activeRightMuscles * 10) / 10,
       netJointTorque,
     });
 
@@ -472,16 +474,18 @@ export function calculateKinematicBends(
     let leftBendDeg = 0;
     let rightBendDeg = 0;
 
+    const contractFactor = 0.5 - 0.5 * Math.cos(muscleStep * Math.PI);
+
     if (jp) {
-      if (jp.activeLeftMuscles > 0) {
+      if (jp.activeLeftMuscles > 0.01) {
         const mass = Math.max(0.5, jp.leftEdgeMass);
         const weightFactor = Math.min(2.0, Math.max(0.4, (1 + jp.activeLeftMuscles * 0.6) / (1 + mass * 0.35)));
-        leftBendDeg = -9.0 * weightFactor;
+        leftBendDeg = -14.0 * weightFactor * contractFactor;
       }
-      if (jp.activeRightMuscles > 0) {
+      if (jp.activeRightMuscles > 0.01) {
         const mass = Math.max(0.5, jp.rightEdgeMass);
         const weightFactor = Math.min(2.0, Math.max(0.4, (1 + jp.activeRightMuscles * 0.6) / (1 + mass * 0.35)));
-        rightBendDeg = 9.0 * weightFactor;
+        rightBendDeg = 14.0 * weightFactor * contractFactor;
       }
     }
 

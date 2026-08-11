@@ -71,7 +71,17 @@ func (bc *BotController) UpdateBot(bot *Creature, foods []Food, creatures []Crea
 	for i := range foods {
 		f := &foods[i]
 		dx := f.X - bot.X
+		if dx > 750.0 {
+			dx -= 1500.0
+		} else if dx < -750.0 {
+			dx += 1500.0
+		}
 		dy := f.Y - bot.Y
+		if dy > 750.0 {
+			dy -= 1500.0
+		} else if dy < -750.0 {
+			dy += 1500.0
+		}
 		dSq := dx*dx + dy*dy
 		if dSq < minFoodDistSq {
 			minFoodDistSq = dSq
@@ -89,7 +99,17 @@ func (bc *BotController) UpdateBot(bot *Creature, foods []Food, creatures []Crea
 			continue
 		}
 		dx := c.X - bot.X
+		if dx > 750.0 {
+			dx -= 1500.0
+		} else if dx < -750.0 {
+			dx += 1500.0
+		}
 		dy := c.Y - bot.Y
+		if dy > 750.0 {
+			dy -= 1500.0
+		} else if dy < -750.0 {
+			dy += 1500.0
+		}
 		dSq := dx*dx + dy*dy
 		if dSq < 25.0 && c.Score > bot.Score {
 			if dSq < minThreatDistSq {

@@ -31,20 +31,41 @@ func (sg *SpatialGrid) Insert(id string, x, y float64) {
 
 func (sg *SpatialGrid) GetNearby(x, y, radius float64) []string {
 	cellRadius := int64(math.Ceil(radius / sg.cellSize))
-	cx := int64(math.Floor(x / sg.cellSize))
-	cy := int64(math.Floor(y / sg.cellSize))
 
 	resultMap := make(map[string]bool)
 	var results []string
 
-	for dx := -cellRadius; dx <= cellRadius; dx++ {
-		for dy := -cellRadius; dy <= cellRadius; dy++ {
-			key := ((cx + dx) << 32) ^ ((cy + dy) & 0xFFFFFFFF)
-			if ids, exists := sg.cells[key]; exists {
-				for _, id := range ids {
-					if !resultMap[id] {
-						resultMap[id] = true
-						results = append(results, id)
+	xCoords := []float64{x}
+	if x+radius > 750.0 {
+		xCoords = append(xCoords, x-1500.0)
+	}
+	if x-radius < -750.0 {
+		xCoords = append(xCoords, x+1500.0)
+	}
+
+	yCoords := []float64{y}
+	if y+radius > 750.0 {
+		yCoords = append(yCoords, y-1500.0)
+	}
+	if y-radius < -750.0 {
+		yCoords = append(yCoords, y+1500.0)
+	}
+
+	for _, qx := range xCoords {
+		for _, qy := range yCoords {
+			cx := int64(math.Floor(qx / sg.cellSize))
+			cy := int64(math.Floor(qy / sg.cellSize))
+
+			for dx := -cellRadius; dx <= cellRadius; dx++ {
+				for dy := -cellRadius; dy <= cellRadius; dy++ {
+					key := ((cx + dx) << 32) ^ ((cy + dy) & 0xFFFFFFFF)
+					if ids, exists := sg.cells[key]; exists {
+						for _, id := range ids {
+							if !resultMap[id] {
+								resultMap[id] = true
+								results = append(results, id)
+							}
+						}
 					}
 				}
 			}

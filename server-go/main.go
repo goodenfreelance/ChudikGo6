@@ -21,8 +21,8 @@ func main() {
 
 	var hubRef *ws.Hub
 
-	// Create Room (World radius = 75.0 grid units, min 0 bots, max 120 foods)
-	room := game.NewRoom(75.0, 0, 120, func(msg game.WSOutputMessage, targetPlayerID string) {
+	// Create Room (World field = 1500x1500 grid units, halfRadius = 750.0, min 0 bots, max 350 foods)
+	room := game.NewRoom(750.0, 0, 350, func(msg game.WSOutputMessage, targetPlayerID string) {
 		if hubRef != nil {
 			hubRef.BroadcastRoomState(msg, targetPlayerID)
 		}

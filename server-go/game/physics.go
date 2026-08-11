@@ -508,15 +508,41 @@ func CalculateCreatureRadius(elements []CreatureElement) float64 {
 }
 
 func PointToSegmentDistanceSq(px, py, ax, ay, bx, by float64) float64 {
-	dx := bx - ax
-	dy := by - ay
-	if dx == 0 && dy == 0 {
-		return (px-ax)*(px-ax) + (py-ay)*(py-ay)
+	// Normalize px, py and bx, by relative to ax, ay for wrapped boundaries
+	dpx := px - ax
+	if dpx > 750.0 {
+		dpx -= 1500.0
+	} else if dpx < -750.0 {
+		dpx += 1500.0
 	}
-	t := math.Max(0, math.Min(1, ((px-ax)*dx+(py-ay)*dy)/(dx*dx+dy*dy)))
-	projX := ax + t*dx
-	projY := ay + t*dy
-	return (px-projX)*(px-projX) + (py-projY)*(py-projY)
+	dpy := py - ay
+	if dpy > 750.0 {
+		dpy -= 1500.0
+	} else if dpy < -750.0 {
+		dpy += 1500.0
+	}
+
+	dbx := bx - ax
+	if dbx > 750.0 {
+		dbx -= 1500.0
+	} else if dbx < -750.0 {
+		dbx += 1500.0
+	}
+	dby := by - ay
+	if dby > 750.0 {
+		dby -= 1500.0
+	} else if dby < -750.0 {
+		dby += 1500.0
+	}
+
+	if dbx == 0 && dby == 0 {
+		return dpx*dpx + dpy*dpy
+	}
+	l2 := dbx*dbx + dby*dby
+	t := math.Max(0, math.Min(1, (dpx*dbx+dpy*dby)/l2))
+	projX := t * dbx
+	projY := t * dby
+	return (dpx-projX)*(dpx-projX) + (dpy-projY)*(dpy-projY)
 }
 
 func GetCreatureElementWorldPositions(cx, cy, angleDeg float64, elements []CreatureElement) []Point {

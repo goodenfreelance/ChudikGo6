@@ -12,6 +12,7 @@ interface GridCanvasProps {
   gridTheme: GridTheme;
   showNodes: boolean;
   pendingPlacement: PendingPlacement | null;
+  worldRadius?: number;
   onNodeClick: (x: number, y: number, isRightClick: boolean) => void;
   onSelectCreature: (id: string | null) => void;
   onPlaceCreature: (x: number, y: number, angleDeg: number) => void;
@@ -30,6 +31,7 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
   gridTheme,
   showNodes,
   pendingPlacement,
+  worldRadius = 50,
   onNodeClick,
   onSelectCreature,
   onPlaceCreature,
@@ -38,6 +40,8 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
   onTurnPlayer,
   onMovePlayerForward,
 }) => {
+  const halfWorld = worldRadius;
+  const worldSize = worldRadius * 2;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Pan, zoom and placement state
@@ -404,9 +408,9 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
         ctx.fill();
       }
 
-      // Render 1500x1500 Field Arena Border Frame
-      const arenaTopLeft = gridToScreen(-750, -750);
-      const arenaBottomRight = gridToScreen(750, 750);
+      // Render Field Arena Border Frame
+      const arenaTopLeft = gridToScreen(-halfWorld, -halfWorld);
+      const arenaBottomRight = gridToScreen(halfWorld, halfWorld);
       const arenaW = arenaBottomRight.x - arenaTopLeft.x;
       const arenaH = arenaBottomRight.y - arenaTopLeft.y;
 
@@ -502,23 +506,23 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
         const p = creature.moveProgress;
 
         let dx = creature.x - creature.prevX;
-        if (dx > 750) dx -= 1500;
-        if (dx < -750) dx += 1500;
+        if (dx > halfWorld) dx -= worldSize;
+        if (dx < -halfWorld) dx += worldSize;
 
         let dy = creature.y - creature.prevY;
-        if (dy > 750) dy -= 1500;
-        if (dy < -750) dy += 1500;
+        if (dy > halfWorld) dy -= worldSize;
+        if (dy < -halfWorld) dy += worldSize;
 
         const rawX = creature.prevX + dx * p;
         const rawY = creature.prevY + dy * p;
 
         let currentX = rawX;
-        if (currentX > 750) currentX -= 1500;
-        if (currentX < -750) currentX += 1500;
+        if (currentX > halfWorld) currentX -= worldSize;
+        if (currentX < -halfWorld) currentX += worldSize;
 
         let currentY = rawY;
-        if (currentY > 750) currentY -= 1500;
-        if (currentY < -750) currentY += 1500;
+        if (currentY > halfWorld) currentY -= worldSize;
+        if (currentY < -halfWorld) currentY += worldSize;
 
         // Interpolate angle with shortest path normalization
         let angleDiff = creature.angleDeg - creature.prevAngleDeg;
@@ -532,16 +536,17 @@ export const GridCanvas: React.FC<GridCanvasProps> = ({
 
         const isSelected = creature.id === selectedCreatureId;
 
-        // Toroidal wrapper offsets for seamless boundary transition on 1500x1500 grid
+        // Toroidal wrapper offsets for seamless boundary transition
         const wrapOffsets: { x: number; y: number }[] = [{ x: 0, y: 0 }];
-        if (currentX > 700) wrapOffsets.push({ x: -1500, y: 0 });
-        if (currentX < -700) wrapOffsets.push({ x: 1500, y: 0 });
-        if (currentY > 700) wrapOffsets.push({ x: 0, y: -1500 });
-        if (currentY < -700) wrapOffsets.push({ x: 0, y: 1500 });
-        if (currentX > 700 && currentY > 700) wrapOffsets.push({ x: -1500, y: -1500 });
-        if (currentX > 700 && currentY < -700) wrapOffsets.push({ x: -1500, y: 1500 });
-        if (currentX < -700 && currentY > 700) wrapOffsets.push({ x: 1500, y: -1500 });
-        if (currentX < -700 && currentY < -700) wrapOffsets.push({ x: 1500, y: 1500 });
+        const edgeThresh = halfWorld - 10;
+        if (currentX > edgeThresh) wrapOffsets.push({ x: -worldSize, y: 0 });
+        if (currentX < -edgeThresh) wrapOffsets.push({ x: worldSize, y: 0 });
+        if (currentY > edgeThresh) wrapOffsets.push({ x: 0, y: -worldSize });
+        if (currentY < -edgeThresh) wrapOffsets.push({ x: 0, y: worldSize });
+        if (currentX > edgeThresh && currentY > edgeThresh) wrapOffsets.push({ x: -worldSize, y: -worldSize });
+        if (currentX > edgeThresh && currentY < -edgeThresh) wrapOffsets.push({ x: -worldSize, y: worldSize });
+        if (currentX < -edgeThresh && currentY > edgeThresh) wrapOffsets.push({ x: worldSize, y: -worldSize });
+        if (currentX < -edgeThresh && currentY < -edgeThresh) wrapOffsets.push({ x: worldSize, y: worldSize });
 
         wrapOffsets.forEach((off) => {
           const centerPos = gridToScreen(currentX + off.x, currentY + off.y);

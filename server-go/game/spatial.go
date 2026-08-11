@@ -36,19 +36,19 @@ func (sg *SpatialGrid) GetNearby(x, y, radius float64) []string {
 	var results []string
 
 	xCoords := []float64{x}
-	if x+radius > 750.0 {
-		xCoords = append(xCoords, x-1500.0)
+	if x+radius > 50.0 {
+		xCoords = append(xCoords, x-100.0)
 	}
-	if x-radius < -750.0 {
-		xCoords = append(xCoords, x+1500.0)
+	if x-radius < -50.0 {
+		xCoords = append(xCoords, x+100.0)
 	}
 
 	yCoords := []float64{y}
-	if y+radius > 750.0 {
-		yCoords = append(yCoords, y-1500.0)
+	if y+radius > 50.0 {
+		yCoords = append(yCoords, y-100.0)
 	}
-	if y-radius < -750.0 {
-		yCoords = append(yCoords, y+1500.0)
+	if y-radius < -50.0 {
+		yCoords = append(yCoords, y+100.0)
 	}
 
 	for _, qx := range xCoords {

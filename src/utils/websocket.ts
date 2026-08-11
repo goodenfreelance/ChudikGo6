@@ -61,8 +61,12 @@ export class GameWebSocket {
   private reconnectTimer: any = null;
 
   constructor() {
-    this.playerId = localStorage.getItem('creatures_player_id') || `p-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-    localStorage.setItem('creatures_player_id', this.playerId);
+    let pid = sessionStorage.getItem('creatures_player_id');
+    if (!pid) {
+      pid = `p-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      sessionStorage.setItem('creatures_player_id', pid);
+    }
+    this.playerId = pid;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;

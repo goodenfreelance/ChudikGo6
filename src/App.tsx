@@ -223,6 +223,7 @@ export default function App() {
   }, []);
 
   // Stats
+  const [worldRadius, setWorldRadius] = useState<number>(50);
   const [stats, setStats] = useState<SimulationStats>({
     foodEatenTotal: 0,
     creaturesCreated: 2,
@@ -251,7 +252,10 @@ export default function App() {
         setSelectedCreatureId(msg.yourId);
         setIsConnected(true);
       } else if (msg.type === 'state') {
-        if (msg.creatures && msg.creatures.length > 0) {
+        if (msg.worldRadius) {
+          setWorldRadius(msg.worldRadius);
+        }
+        if (msg.creatures) {
           setCreatures((prev) => {
             const prevMap = new Map<string, Creature>(prev.map((c) => [c.id, c]));
             return msg.creatures.map((c: any) => {
@@ -614,6 +618,7 @@ export default function App() {
           gridTheme={gridTheme}
           showNodes={showNodes}
           pendingPlacement={pendingPlacement}
+          worldRadius={worldRadius}
           onNodeClick={handleNodeClick}
           onSelectCreature={handleSelectCreature}
           onPlaceCreature={handlePlaceCreature}

@@ -77,8 +77,8 @@ func (r *Room) initWorld() {
 
 func (r *Room) spawnRandomFood() {
 	id := fmt.Sprintf("food-%d-%d", time.Now().UnixNano(), r.rnd.Intn(10000))
-	x := math.Round((r.rnd.Float64() - 0.5) * 1440.0)
-	y := math.Round((r.rnd.Float64() - 0.5) * 1440.0)
+	x := math.Round((r.rnd.Float64() - 0.5) * (r.worldRadius * 1.8))
+	y := math.Round((r.rnd.Float64() - 0.5) * (r.worldRadius * 1.8))
 
 	foodType := FoodBerry
 	val := 10
@@ -477,10 +477,10 @@ func (r *Room) Tick() {
 		c.X += dx * speed
 		c.Y += dy * speed
 
-		// World boundary toroidal wrap check for 1500x1500 grid
+		// World boundary toroidal wrap check
 		// Smooth appearance on opposite side preserving angle, velocity vector, speed, and rotation
-		halfWorld := 750.0
-		worldSize := 1500.0
+		halfWorld := r.worldRadius
+		worldSize := r.worldRadius * 2.0
 
 		if c.X > halfWorld {
 			c.X -= worldSize
@@ -541,15 +541,10 @@ func (r *Room) Tick() {
 
 	r.mu.Unlock()
 
-	// 8. Broadcast with view culling + trimmed payload + 15Hz (#2 #5 #6)
+	// 8. Broadcast complete world state (all creatures and food) at 15Hz to all connected players
 	if r.broadcastCb != nil && (r.step%2 == 0) {
-		viewRadius := 35.0
-		viewRadSq := viewRadius * viewRadius
-
 		creaturesNet := make([]CreatureNet, 0, len(r.creatures))
-		creaturesFull := make([]Creature, 0, len(r.creatures))
 		for _, c := range r.creatures {
-			creaturesFull = append(creaturesFull, *c)
 			creaturesNet = append(creaturesNet, ToCreatureNet(*c))
 		}
 
@@ -558,39 +553,15 @@ func (r *Room) Tick() {
 			foodsSnapshot = append(foodsSnapshot, *f)
 		}
 
-		for _, c := range creaturesFull {
-			if c.IsBot {
-				continue
-			}
-
-			visibleCreatures := make([]CreatureNet, 0, len(creaturesNet))
-			for i := range creaturesNet {
-				dxC := creaturesNet[i].X - c.X
-				dyC := creaturesNet[i].Y - c.Y
-				if dxC*dxC+dyC*dyC <= viewRadSq {
-					visibleCreatures = append(visibleCreatures, creaturesNet[i])
-				}
-			}
-
-			visibleFoods := make([]Food, 0, len(foodsSnapshot))
-			for i := range foodsSnapshot {
-				dxF := foodsSnapshot[i].X - c.X
-				dyF := foodsSnapshot[i].Y - c.Y
-				if dxF*dxF+dyF*dyF <= viewRadSq {
-					visibleFoods = append(visibleFoods, foodsSnapshot[i])
-				}
-			}
-
-			r.broadcastCb(WSOutputMessage{
-				Type:        "state",
-				WorldRadius: r.worldRadius,
-				Tick:        r.step,
-				Creatures:   visibleCreatures,
-				Foods:       visibleFoods,
-				Leaderboard: leaderboard,
-				Stats:       &stats,
-			}, c.PlayerID)
-		}
+		r.broadcastCb(WSOutputMessage{
+			Type:        "state",
+			WorldRadius: r.worldRadius,
+			Tick:        r.step,
+			Creatures:   creaturesNet,
+			Foods:       foodsSnapshot,
+			Leaderboard: leaderboard,
+			Stats:       &stats,
+		}, "")
 	}
 }
 

@@ -510,29 +510,29 @@ func CalculateCreatureRadius(elements []CreatureElement) float64 {
 func PointToSegmentDistanceSq(px, py, ax, ay, bx, by float64) float64 {
 	// Normalize px, py and bx, by relative to ax, ay for wrapped boundaries
 	dpx := px - ax
-	if dpx > 750.0 {
-		dpx -= 1500.0
-	} else if dpx < -750.0 {
-		dpx += 1500.0
+	if dpx > 50.0 {
+		dpx -= 100.0
+	} else if dpx < -50.0 {
+		dpx += 100.0
 	}
 	dpy := py - ay
-	if dpy > 750.0 {
-		dpy -= 1500.0
-	} else if dpy < -750.0 {
-		dpy += 1500.0
+	if dpy > 50.0 {
+		dpy -= 100.0
+	} else if dpy < -50.0 {
+		dpy += 100.0
 	}
 
 	dbx := bx - ax
-	if dbx > 750.0 {
-		dbx -= 1500.0
-	} else if dbx < -750.0 {
-		dbx += 1500.0
+	if dbx > 50.0 {
+		dbx -= 100.0
+	} else if dbx < -50.0 {
+		dbx += 100.0
 	}
 	dby := by - ay
-	if dby > 750.0 {
-		dby -= 1500.0
-	} else if dby < -750.0 {
-		dby += 1500.0
+	if dby > 50.0 {
+		dby -= 100.0
+	} else if dby < -50.0 {
+		dby += 100.0
 	}
 
 	if dbx == 0 && dby == 0 {

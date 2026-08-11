@@ -75,7 +75,7 @@ export const DEFAULT_PRESETS: { name: string; description: string; elements: Cre
 // Детерминированная проверка срабатывания случайной мышцы для конкретного цикла
 export function isRandomMuscleTriggered(el: CreatureElement, cycle: number): boolean {
   if (cycle <= 0) return true; // При сбросе / в редакторе показываем мышцу как способную сработать
-  const chance = Math.max(10, Math.min(90, el.randomChance ?? 35));
+  const chance = el.randomChance ?? 35;
   let hash = 0;
   const str = `${el.id}_c_${cycle}`;
   for (let i = 0; i < str.length; i++) {
@@ -126,15 +126,6 @@ export function determineCreatureHeadAngle(elements: CreatureElement[]): number 
 export function calculatePhysicsForces(elements: CreatureElement[], muscleActiveStep: number = 0): PhysicsForces {
   const isMuscleContracted = muscleActiveStep % 2 === 1;
 
-  const headAngle = determineCreatureHeadAngle(elements);
-  const headRad = (headAngle * Math.PI) / 180;
-
-  // Local unit vectors relative to head orientation
-  const fx = Math.cos(headRad);
-  const fy = Math.sin(headRad);
-  const lx = fy;
-  const ly = -fx;
-
   const joints: { id: string; x: number; y: number }[] = [];
   const edgeElements: CreatureElement[] = [];
   const muscleElements: CreatureElement[] = [];
@@ -144,31 +135,31 @@ export function calculatePhysicsForces(elements: CreatureElement[], muscleActive
   let totalLeftMass = 0;
   let totalRightMass = 0;
 
-  // Spec: only edges (ribs) have mass = 1.0; joints, muscles, head = 0
   for (let i = 0; i < elements.length; i++) {
     const el = elements[i];
-    let elWeight = 0;
+    let elWeight = el.weight ?? 0;
 
     if (el.type === 'joint') {
       joints.push({ id: el.id, x: el.relX, y: el.relY });
+      elWeight = 1.0; // Базовая масса сустава / ядра
     } else if (el.type.startsWith('edge-')) {
       edgeElements.push(el);
-      elWeight = 1.0;
+      if (elWeight <= 0) elWeight = 1.0;
     } else if (el.type.startsWith('muscle-')) {
       muscleElements.push(el);
+      elWeight = 0.3; // Небольшая масса мышцы
     } else if (el.type === 'head') {
-      // Head mass = 0 per spec
+      elWeight = 0.5; // Масса головы
     }
 
     totalMass += elWeight;
 
-    // Spec: I = sum(m_i * r_i^2) — no +0.5
+    // Расчет момента инерции масс относительно центра масс (0,0): I = sum(m * (r^2 + 0.5))
     const rSq = el.relX * el.relX + el.relY * el.relY;
-    totalInertia += elWeight * rSq;
+    totalInertia += elWeight * (rSq + 0.5);
 
-    const projLeft = el.relX * lx + el.relY * ly;
-    if (projLeft > 0.01) totalLeftMass += elWeight;
-    else if (projLeft < -0.01) totalRightMass += elWeight;
+    if (el.relX < 0) totalLeftMass += elWeight;
+    else if (el.relX > 0) totalRightMass += elWeight;
     else {
       totalLeftMass += elWeight * 0.5;
       totalRightMass += elWeight * 0.5;
@@ -177,6 +168,8 @@ export function calculatePhysicsForces(elements: CreatureElement[], muscleActive
 
   if (joints.length === 0) {
     joints.push({ id: 'center-joint', x: 0, y: 0 });
+    totalMass += 1.0;
+    totalInertia += 0.5;
   }
 
   totalMass = Math.max(1.0, totalMass);
@@ -199,19 +192,16 @@ export function calculatePhysicsForces(elements: CreatureElement[], muscleActive
 
     for (let eIdx = 0; eIdx < edgeElements.length; eIdx++) {
       const el = edgeElements[eIdx];
-      const weight = 1;
+      const weight = el.weight || 1;
       const dx = el.relX - j.x;
-      const dy = el.relY - j.y;
 
-      const projLeft = dx * lx + dy * ly;
-
-      if (projLeft > 0.01) {
-        const arm = projLeft;
+      if (dx < 0) {
+        const arm = -dx;
         const leverMultiplier = 1 + 0.5 * (arm - 1);
         jLeftMass += weight;
         jLeftTorquePotential += weight * leverMultiplier;
-      } else if (projLeft < -0.01) {
-        const arm = -projLeft;
+      } else if (dx > 0) {
+        const arm = dx;
         const leverMultiplier = 1 + 0.5 * (arm - 1);
         jRightMass += weight;
         jRightTorquePotential += weight * leverMultiplier;
@@ -248,11 +238,8 @@ export function calculatePhysicsForces(elements: CreatureElement[], muscleActive
       }
 
       if (providesTorque) {
-        const mdx = el.relX - j.x;
-        const mdy = el.relY - j.y;
-        const spineDist = Math.abs(mdx * fx + mdy * fy);
-
-        const muscleArm = 1.0 + 0.4 * spineDist;
+        // Плечо рычага мышцы вдоль продольной оси
+        const muscleArm = 1.0 + 0.4 * Math.abs(el.relY - j.y);
         const muscleForce = 1.5 * muscleArm;
 
         if (el.type.includes('left')) {
@@ -267,7 +254,9 @@ export function calculatePhysicsForces(elements: CreatureElement[], muscleActive
       }
     }
 
-    const netJointTorque = activeLeftMuscles - activeRightMuscles;
+    const jointLeftForce = activeLeftMuscles;
+    const jointRightForce = activeRightMuscles;
+    const netJointTorque = jointLeftForce - jointRightForce;
 
     jointsPhysics.push({
       jointId: j.id,
@@ -282,14 +271,15 @@ export function calculatePhysicsForces(elements: CreatureElement[], muscleActive
       netJointTorque,
     });
 
-    sumLeftTorque += activeLeftMuscles;
-    sumRightTorque += activeRightMuscles;
+    sumLeftTorque += jointLeftForce;
+    sumRightTorque += jointRightForce;
     totalActiveMusclesCount += (activeLeftMuscles + activeRightMuscles > 0 ? 1 : 0);
   }
 
   const netTorque = sumLeftTorque - sumRightTorque;
 
-  // Rotation from torque difference
+  // 1. Угол разворота: w = (Torque / Inertia) * C_rotation
+  // Чем больше момент инерции I, тем больше требуется крутящего момента Torque для разворота
   let netRotationDeg = 0;
   if (Math.abs(netTorque) > 0) {
     const rawRotation = (netTorque / totalInertia) * 28;
@@ -298,10 +288,23 @@ export function calculatePhysicsForces(elements: CreatureElement[], muscleActive
 
   const isLighterSideRotating = totalLeftMass !== totalRightMass && netTorque !== 0;
 
-  // Spec 3.3: v_forward = 0.25 base per contraction/extension phase when active muscles present; 0 without active muscles
+  // 2. Линейная скорость движения вперед: v = (Thrust / Mass) * C_speed
+  // Чем тяжелее тело (больше Mass), тем больше мышц/тяги требуется для движения
   let forwardSpeed = 0;
-  if (motionActiveMusclesCount > 0 || totalActiveMusclesCount > 0 || sumLeftTorque > 0 || sumRightTorque > 0) {
-    forwardSpeed = 0.25;
+  if (motionActiveMusclesCount > 0 || sumLeftTorque > 0 || sumRightTorque > 0) {
+    let thrust = 0;
+    if (sumLeftTorque > 0 && sumRightTorque > 0) {
+      // Работают мышцы с обеих сторон (симметричная тяга вперед)
+      thrust = sumLeftTorque + sumRightTorque;
+    } else if (sumLeftTorque > 0 || sumRightTorque > 0) {
+      // Работает только одна сторона (разворот с увлечением вперед)
+      thrust = Math.max(sumLeftTorque, sumRightTorque) * 0.65;
+    } else {
+      thrust = 0.8 * motionActiveMusclesCount;
+    }
+
+    const calculatedSpeed = (thrust / totalMass) * 0.22;
+    forwardSpeed = Math.min(0.40, Math.max(0.02, calculatedSpeed));
   }
 
   return {
@@ -397,20 +400,17 @@ export function calculateKinematicBends(
   const result = new Map<string, BentElementPosition>();
   if (elements.length === 0) return result;
 
+  const forces = precalculatedForces || calculatePhysicsForces(elements, muscleStep);
+  const jointsPhysicsMap = new Map(forces.jointsPhysics.map((jp) => [jp.jointId, jp]));
+
+  // Быстрый поиск по ID элементов
   const elementMap = new Map<string, CreatureElement>();
   const jointEls: CreatureElement[] = [];
-  const edgeEls: CreatureElement[] = [];
-  const muscleEls: CreatureElement[] = [];
-
   for (let i = 0; i < elements.length; i++) {
     const el = elements[i];
     elementMap.set(el.id, el);
     if (el.type === 'joint') {
       jointEls.push(el);
-    } else if (el.type.startsWith('edge-')) {
-      edgeEls.push(el);
-    } else if (el.type.startsWith('muscle-')) {
-      muscleEls.push(el);
     }
   }
 
@@ -418,7 +418,7 @@ export function calculateKinematicBends(
     ? jointEls.map((j) => ({ id: j.id, x: j.relX, y: j.relY }))
     : [{ id: 'center-joint', x: 0, y: 0 }];
 
-  // 1. Найти корневой шарнир (ближайший к центру 0,0)
+  // Найти корневой шарнир (ближайший к центру 0,0)
   let rootJoint = joints[0];
   let minDistSq = rootJoint.x * rootJoint.x + rootJoint.y * rootJoint.y;
   for (let i = 1; i < joints.length; i++) {
@@ -429,16 +429,20 @@ export function calculateKinematicBends(
     }
   }
 
-  // Сглаженная непрерывная фаза сокращения регулярных мышц (0..1..0)
-  const flexPulse = (1 - Math.cos(muscleStep * Math.PI)) * 0.5;
-  const currentIntStep = Math.floor(muscleStep);
+  // 2. Сортируем шарниры по удаленности от корневого
+  const sortedJoints = joints.length > 1
+    ? [...joints].sort((a, b) => {
+        const dA = (a.x - rootJoint.x) ** 2 + (a.y - rootJoint.y) ** 2;
+        const dB = (b.x - rootJoint.x) ** 2 + (b.y - rootJoint.y) ** 2;
+        return dA - dB;
+      })
+    : joints;
 
-  interface JointData {
+  interface JointNode {
     id: string;
     x: number;
     y: number;
-    leftMass: number;
-    rightMass: number;
+    parent: JointNode | null;
     leftBendDeg: number;
     rightBendDeg: number;
     accumulatedRotDeg: number;
@@ -446,236 +450,118 @@ export function calculateKinematicBends(
     worldY: number;
   }
 
-  const jointDataMap = new Map<string, JointData>();
+  const nodeMap = new Map<string, JointNode>();
+  const nodeList: JointNode[] = [];
 
-  // Local unit vectors relative to head orientation
-  const headAngle = determineCreatureHeadAngle(elements);
-  const headRad = (headAngle * Math.PI) / 180;
-  const fx = Math.cos(headRad);
-  const fy = Math.sin(headRad);
-  const lx = fy;
-  const ly = -fx;
-
-  // 2. Рассчитываем физические свойства каждого шарнира (массы и сгибы)
-  for (let i = 0; i < joints.length; i++) {
-    const j = joints[i];
-
-    // Массы плеч относительно шарнира j
-    let leftMass = 0;
-    let rightMass = 0;
-
-    for (let eIdx = 0; eIdx < edgeEls.length; eIdx++) {
-      const eel = edgeEls[eIdx];
-      const dx = eel.relX - j.x;
-      const dy = eel.relY - j.y;
-      const projLeft = dx * lx + dy * ly;
-      if (projLeft > 0.01) leftMass += 1.0;
-      else if (projLeft < -0.01) rightMass += 1.0;
-      else {
-        leftMass += 0.5;
-        rightMass += 0.5;
-      }
-    }
-    leftMass = Math.max(0.5, leftMass);
-    rightMass = Math.max(0.5, rightMass);
-
-    // Активность мышц при шарнире j
-    let leftMuscleForce = 0;
-    let rightMuscleForce = 0;
-
-    for (let mIdx = 0; mIdx < muscleEls.length; mIdx++) {
-      const mel = muscleEls[mIdx];
-      if (joints.length > 1) {
-        const mdx = mel.relX - j.x;
-        const mdy = mel.relY - j.y;
-        if (mdx * mdx + mdy * mdy > 6.25) continue;
-      }
-
-      let isFlexed = false;
-      if (mel.type === 'muscle-left' || mel.type === 'muscle-right') {
-        isFlexed = true; // Регулярные мышцы активны
-      } else if (mel.type.startsWith('muscle-random-')) {
-        isFlexed = getRandomMuscleState(mel, currentIntStep).isFlexed;
-      }
-
-      if (!isFlexed) continue;
-
-      const mdx = mel.relX - j.x;
-      const mdy = mel.relY - j.y;
-      const spineDist = Math.abs(mdx * fx + mdy * fy);
-      const muscleArm = 1.0 + 0.4 * spineDist;
-      const forceVal = 1.5 * muscleArm;
-
-      if (mel.type.includes('left')) {
-        leftMuscleForce += forceVal;
-      } else if (mel.type.includes('right')) {
-        rightMuscleForce += forceVal;
+  for (let i = 0; i < sortedJoints.length; i++) {
+    const j = sortedJoints[i];
+    let parentNode: JointNode | null = null;
+    if (j.id !== rootJoint.id) {
+      let parentMinDistSq = Infinity;
+      for (let k = 0; k < nodeList.length; k++) {
+        const candidate = nodeList[k];
+        const dSq = (j.x - candidate.x) ** 2 + (j.y - candidate.y) ** 2;
+        if (dSq < parentMinDistSq) {
+          parentMinDistSq = dSq;
+          parentNode = candidate;
+        }
       }
     }
 
+    const jp = jointsPhysicsMap.get(j.id);
     let leftBendDeg = 0;
     let rightBendDeg = 0;
 
-    if (leftMuscleForce > 0) {
-      const rawBend = (leftMass * 35.0 * leftMuscleForce) / (1.0 + 0.25 * leftMass);
-      const maxAngle = Math.min(72.0, Math.max(18.0, rawBend));
-      leftBendDeg = -maxAngle * flexPulse;
-    }
-
-    if (rightMuscleForce > 0) {
-      const rawBend = (rightMass * 35.0 * rightMuscleForce) / (1.0 + 0.25 * rightMass);
-      const maxAngle = Math.min(72.0, Math.max(18.0, rawBend));
-      rightBendDeg = maxAngle * flexPulse;
-    }
-
-    jointDataMap.set(j.id, {
-      id: j.id,
-      x: j.x,
-      y: j.y,
-      leftMass,
-      rightMass,
-      leftBendDeg,
-      rightBendDeg,
-      accumulatedRotDeg: 0,
-      worldX: j.x,
-      worldY: j.y,
-    });
-  }
-
-  // 3. Строим дерево кинематики шарниров от rootJoint
-  const processedJointIds = new Set<string>();
-  const processedJointsList: JointData[] = [];
-
-  const rootData = jointDataMap.get(rootJoint.id)!;
-  rootData.worldX = rootJoint.x;
-  rootData.worldY = rootJoint.y;
-  rootData.accumulatedRotDeg = 0;
-  processedJointIds.add(rootJoint.id);
-  processedJointsList.push(rootData);
-
-  // Сортируем остальные шарниры по удаленности от корневого
-  const remainingJoints = joints
-    .filter((j) => j.id !== rootJoint.id)
-    .sort((a, b) => {
-      const dA = (a.x - rootJoint.x) ** 2 + (a.y - rootJoint.y) ** 2;
-      const dB = (b.x - rootJoint.x) ** 2 + (b.y - rootJoint.y) ** 2;
-      return dA - dB;
-    });
-
-  for (let i = 0; i < remainingJoints.length; i++) {
-    const j = remainingJoints[i];
-    const jData = jointDataMap.get(j.id)!;
-
-    // Находим ближайший обработанный родительский шарнир
-    let parentData = processedJointsList[0];
-    let parentMinDistSq = (j.x - parentData.x) ** 2 + (j.y - parentData.y) ** 2;
-
-    for (let pIdx = 1; pIdx < processedJointsList.length; pIdx++) {
-      const cand = processedJointsList[pIdx];
-      const dSq = (j.x - cand.x) ** 2 + (j.y - cand.y) ** 2;
-      if (dSq < parentMinDistSq) {
-        parentMinDistSq = dSq;
-        parentData = cand;
+    if (jp) {
+      if (jp.activeLeftMuscles > 0) {
+        const mass = Math.max(0.5, jp.leftEdgeMass);
+        const weightFactor = Math.min(2.0, Math.max(0.4, (1 + jp.activeLeftMuscles * 0.6) / (1 + mass * 0.35)));
+        leftBendDeg = -9.0 * weightFactor;
+      }
+      if (jp.activeRightMuscles > 0) {
+        const mass = Math.max(0.5, jp.rightEdgeMass);
+        const weightFactor = Math.min(2.0, Math.max(0.4, (1 + jp.activeRightMuscles * 0.6) / (1 + mass * 0.35)));
+        rightBendDeg = 9.0 * weightFactor;
       }
     }
 
-    const dx = j.x - parentData.x;
-    const dy = j.y - parentData.y;
-    const projLeft = dx * lx + dy * ly;
-    let bendOffset = 0;
-    if (projLeft > 0.01) {
-      bendOffset = parentData.leftBendDeg;
-    } else if (projLeft < -0.01) {
-      bendOffset = parentData.rightBendDeg;
-    } else {
-      bendOffset = 0; // На оси позвоночника
+    let accumulatedRotDeg = 0;
+    let worldX = j.x;
+    let worldY = j.y;
+
+    if (parentNode) {
+      const parentDx = j.x - parentNode.x;
+      const parentSideBend = parentDx < 0 ? parentNode.leftBendDeg : parentDx > 0 ? parentNode.rightBendDeg : 0;
+      accumulatedRotDeg = parentNode.accumulatedRotDeg + parentSideBend;
+
+      const rad = (accumulatedRotDeg * Math.PI) / 180;
+      const rotX = parentDx * Math.cos(rad) - (j.y - parentNode.y) * Math.sin(rad);
+      const rotY = parentDx * Math.sin(rad) + (j.y - parentNode.y) * Math.cos(rad);
+      worldX = parentNode.worldX + rotX;
+      worldY = parentNode.worldY + rotY;
     }
 
-    const totalRotDeg = parentData.accumulatedRotDeg + bendOffset;
-    jData.accumulatedRotDeg = totalRotDeg;
+    const node: JointNode = {
+      id: j.id,
+      x: j.x,
+      y: j.y,
+      parent: parentNode,
+      leftBendDeg,
+      rightBendDeg,
+      accumulatedRotDeg,
+      worldX,
+      worldY,
+    };
 
-    const rad = (parentData.accumulatedRotDeg + bendOffset) * (Math.PI / 180);
-    const relX = j.x - parentData.x;
-    const relY = j.y - parentData.y;
+    nodeMap.set(j.id, node);
+    nodeList.push(node);
 
-    const rotX = relX * Math.cos(rad) - relY * Math.sin(rad);
-    const rotY = relX * Math.sin(rad) + relY * Math.cos(rad);
-
-    jData.worldX = parentData.worldX + rotX;
-    jData.worldY = parentData.worldY + rotY;
-
-    processedJointIds.add(j.id);
-    processedJointsList.push(jData);
-  }
-
-  // Сохраняем позиции шарниров
-  for (let i = 0; i < processedJointsList.length; i++) {
-    const jd = processedJointsList[i];
-    const jointEl = elementMap.get(jd.id);
+    const jointEl = elementMap.get(j.id);
     if (jointEl) {
       result.set(jointEl.id, {
         id: jointEl.id,
-        relX: jd.worldX,
-        relY: jd.worldY,
-        rotationDeg: jd.accumulatedRotDeg,
+        relX: worldX,
+        relY: worldY,
+        rotationDeg: accumulatedRotDeg,
       });
     }
   }
 
-  // 4. Позиционируем и поворачиваем все не-шарнирные элементы
+  // 3. Для всех не-шарнирных элементов привязываем их к ближайшему шарнирному узлу
   for (let i = 0; i < elements.length; i++) {
     const el = elements[i];
     if (el.type === 'joint') continue;
 
-    // Находим ближайший шарнир
-    let closestJoint = processedJointsList[0];
-    let closestDistSq = (el.relX - closestJoint.x) ** 2 + (el.relY - closestJoint.y) ** 2;
+    let closestNode: JointNode = nodeList[0] || nodeMap.get(rootJoint.id)!;
+    let closestDistSq = Infinity;
 
-    for (let k = 1; k < processedJointsList.length; k++) {
-      const jd = processedJointsList[k];
-      const dSq = (el.relX - jd.x) ** 2 + (el.relY - jd.y) ** 2;
+    for (let k = 0; k < nodeList.length; k++) {
+      const node = nodeList[k];
+      const dSq = (el.relX - node.x) ** 2 + (el.relY - node.y) ** 2;
       if (dSq < closestDistSq) {
         closestDistSq = dSq;
-        closestJoint = jd;
+        closestNode = node;
       }
     }
 
-    const dx = el.relX - closestJoint.x;
-    const dy = el.relY - closestJoint.y;
-    const projLeft = dx * lx + dy * ly;
+    const dx = el.relX - closestNode.x;
+    const dy = el.relY - closestNode.y;
+    const sideBendDeg = dx < 0 ? closestNode.leftBendDeg : dx > 0 ? closestNode.rightBendDeg : 0;
+    const totalElementRotDeg = closestNode.accumulatedRotDeg + sideBendDeg;
 
-    let sideBendDeg = 0;
-    if (projLeft > 0.01 || el.type.includes('left')) {
-      sideBendDeg = closestJoint.leftBendDeg;
-    } else if (projLeft < -0.01 || el.type.includes('right')) {
-      sideBendDeg = closestJoint.rightBendDeg;
-    } else {
-      sideBendDeg = 0;
-    }
-
-    const totalRotDeg = closestJoint.accumulatedRotDeg + sideBendDeg;
-    const rad = (closestJoint.accumulatedRotDeg + sideBendDeg) * (Math.PI / 180);
-
+    const rad = (totalElementRotDeg * Math.PI) / 180;
     const rotX = dx * Math.cos(rad) - dy * Math.sin(rad);
     const rotY = dx * Math.sin(rad) + dy * Math.cos(rad);
 
     result.set(el.id, {
       id: el.id,
-      relX: closestJoint.worldX + rotX,
-      relY: closestJoint.worldY + rotY,
-      rotationDeg: totalRotDeg,
+      relX: closestNode.worldX + rotX,
+      relY: closestNode.worldY + rotY,
+      rotationDeg: totalElementRotDeg,
     });
   }
 
   return result;
-}
-
-function sortedJointsForBends(joints: { id: string; x: number; y: number }[], rootJoint: { id: string; x: number; y: number }) {
-  return [...joints].sort((a, b) => {
-    const dA = (a.x - rootJoint.x) ** 2 + (a.y - rootJoint.y) ** 2;
-    const dB = (b.x - rootJoint.x) ** 2 + (b.y - rootJoint.y) ** 2;
-    return dA - dB;
-  });
 }
 
 // Расчет всех точек чудика в мировых координатах с учетом изгибов

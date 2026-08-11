@@ -146,15 +146,6 @@ func DetermineCreatureHeadAngle(elements []CreatureElement) float64 {
 func CalculatePhysicsForces(elements []CreatureElement, muscleActiveStep int) PhysicsForces {
 	isMuscleContracted := muscleActiveStep%2 == 1
 
-	headAngle := DetermineCreatureHeadAngle(elements)
-	headRad := (headAngle * math.Pi) / 180.0
-
-	// Local unit vectors relative to head orientation
-	fx := math.Cos(headRad)
-	fy := math.Sin(headRad)
-	lx := fy
-	ly := -fx
-
 	type JointNode struct {
 		ID string
 		X  float64
@@ -170,31 +161,33 @@ func CalculatePhysicsForces(elements []CreatureElement, muscleActiveStep int) Ph
 	totalLeftMass := 0.0
 	totalRightMass := 0.0
 
-	// Spec: only edges (ribs) have mass = 1.0; joints, muscles, head = 0
 	for _, el := range elements {
-		elWeight := 0.0
+		elWeight := el.Weight
 
 		if el.Type == ElementJoint {
 			joints = append(joints, JointNode{ID: el.ID, X: el.RelX, Y: el.RelY})
+			elWeight = 1.0 // Базовая масса сустава / ядра
 		} else if strings.HasPrefix(string(el.Type), "edge-") {
 			edgeElements = append(edgeElements, el)
-			elWeight = 1.0
+			if elWeight <= 0 {
+				elWeight = 1.0
+			}
 		} else if strings.HasPrefix(string(el.Type), "muscle-") {
 			muscleElements = append(muscleElements, el)
+			elWeight = 0.3 // Небольшая масса мышцы
 		} else if el.Type == ElementHead {
-			// Head mass = 0 per spec
+			elWeight = 0.5 // Масса головы
 		}
 
 		totalMass += elWeight
 
-		// Spec: I = sum(m_i * r_i^2) — no +0.5
+		// Расчет момента инерции масс относительно центра масс (0,0): I = sum(m * (r^2 + 0.5))
 		rSq := el.RelX*el.RelX + el.RelY*el.RelY
-		totalInertia += elWeight * rSq
+		totalInertia += elWeight * (rSq + 0.5)
 
-		projLeft := el.RelX*lx + el.RelY*ly
-		if projLeft > 0.01 {
+		if el.RelX < 0 {
 			totalLeftMass += elWeight
-		} else if projLeft < -0.01 {
+		} else if el.RelX > 0 {
 			totalRightMass += elWeight
 		} else {
 			totalLeftMass += elWeight * 0.5
@@ -204,9 +197,10 @@ func CalculatePhysicsForces(elements []CreatureElement, muscleActiveStep int) Ph
 
 	if len(joints) == 0 {
 		joints = append(joints, JointNode{ID: "center-joint", X: 0, Y: 0})
+		totalMass += 1.0
+		totalInertia += 0.5
 	}
 
-	// Spec fallback: I ~= M * R^2 * 0.5 when too small
 	totalMass = math.Max(1.0, totalMass)
 	totalInertia = math.Max(1.0, totalInertia)
 
@@ -225,19 +219,19 @@ func CalculatePhysicsForces(elements []CreatureElement, muscleActiveStep int) Ph
 		jRightTorquePotential := 0.0
 
 		for _, el := range edgeElements {
-			weight := 1.0
+			weight := el.Weight
+			if weight <= 0 {
+				weight = 1.0
+			}
 			dx := el.RelX - j.X
-			dy := el.RelY - j.Y
 
-			projLeft := dx*lx + dy*ly
-
-			if projLeft > 0.01 {
-				arm := projLeft
+			if dx < 0 {
+				arm := -dx
 				leverMultiplier := 1.0 + 0.5*(arm-1.0)
 				jLeftMass += weight
 				jLeftTorquePotential += weight * leverMultiplier
-			} else if projLeft < -0.01 {
-				arm := -projLeft
+			} else if dx > 0 {
+				arm := dx
 				leverMultiplier := 1.0 + 0.5*(arm-1.0)
 				jRightMass += weight
 				jRightTorquePotential += weight * leverMultiplier
@@ -274,11 +268,8 @@ func CalculatePhysicsForces(elements []CreatureElement, muscleActiveStep int) Ph
 			}
 
 			if providesTorque {
-				mdx := el.RelX - j.X
-				mdy := el.RelY - j.Y
-				spineDist := math.Abs(mdx*fx + mdy*fy)
-
-				muscleArm := 1.0 + 0.4*spineDist
+				// Плечо рычага мышцы вдоль продольной оси
+				muscleArm := 1.0 + 0.4*math.Abs(el.RelY-j.Y)
 				muscleForce := 1.5 * muscleArm
 
 				if strings.Contains(string(el.Type), "left") {
@@ -293,7 +284,9 @@ func CalculatePhysicsForces(elements []CreatureElement, muscleActiveStep int) Ph
 			}
 		}
 
-		netJointTorque := activeLeftMuscles - activeRightMuscles
+		jointLeftForce := activeLeftMuscles
+		jointRightForce := activeRightMuscles
+		netJointTorque := jointLeftForce - jointRightForce
 
 		jointsPhysics = append(jointsPhysics, JointPhysics{
 			JointID:              j.ID,
@@ -308,8 +301,8 @@ func CalculatePhysicsForces(elements []CreatureElement, muscleActiveStep int) Ph
 			NetJointTorque:       netJointTorque,
 		})
 
-		sumLeftTorque += activeLeftMuscles
-		sumRightTorque += activeRightMuscles
+		sumLeftTorque += jointLeftForce
+		sumRightTorque += jointRightForce
 		if activeLeftMuscles+activeRightMuscles > 0 {
 			totalActiveMusclesCount++
 		}
@@ -317,7 +310,8 @@ func CalculatePhysicsForces(elements []CreatureElement, muscleActiveStep int) Ph
 
 	netTorque := sumLeftTorque - sumRightTorque
 
-	// Rotation from torque difference
+	// 1. Угол разворота: w = (Torque / Inertia) * C_rotation
+	// Чем больше момент инерции I, тем больше требуется крутящего момента Torque для разворота
 	netRotationDeg := 0.0
 	if math.Abs(netTorque) > 0 {
 		rawRotation := (netTorque / totalInertia) * 28.0
@@ -326,10 +320,23 @@ func CalculatePhysicsForces(elements []CreatureElement, muscleActiveStep int) Ph
 
 	isLighterSideRotating := totalLeftMass != totalRightMass && netTorque != 0
 
-	// Spec 3.3: v_forward = 0.25 base per contraction/extension phase when active muscles present; 0 without active muscles
+	// 2. Линейная скорость движения вперед: v = (Thrust / Mass) * C_speed
+	// Чем тяжелее тело (больше Mass), тем больше мышц/тяги требуется для движения
 	forwardSpeed := 0.0
-	if motionActiveMusclesCount > 0 || totalActiveMusclesCount > 0 || sumLeftTorque > 0 || sumRightTorque > 0 {
-		forwardSpeed = 0.25
+	if motionActiveMusclesCount > 0 || sumLeftTorque > 0 || sumRightTorque > 0 {
+		thrust := 0.0
+		if sumLeftTorque > 0 && sumRightTorque > 0 {
+			// Работают мышцы с обеих сторон (симметричная тяга вперед)
+			thrust = sumLeftTorque + sumRightTorque
+		} else if sumLeftTorque > 0 || sumRightTorque > 0 {
+			// Работает только одна сторона (разворот с увлечением вперед)
+			thrust = math.Max(sumLeftTorque, sumRightTorque) * 0.65
+		} else {
+			thrust = 0.8 * float64(motionActiveMusclesCount)
+		}
+
+		calculatedSpeed := (thrust / totalMass) * 0.22
+		forwardSpeed = math.Min(0.40, math.Max(0.02, calculatedSpeed))
 	}
 
 	return PhysicsForces{

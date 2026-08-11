@@ -427,8 +427,22 @@ func (r *Room) Tick() {
 			r.botController.UpdateBot(c, botFoods, botCreatures)
 		}
 
+		// Advance muscle step for biomechanical movement phase
+		c.MuscleStep++
+
 		// Calculate physics forces
 		c.Forces = CalculatePhysicsForces(c.Elements, c.MuscleStep)
+
+		// Apply physical rotation around central axis from muscle torque
+		if math.Abs(c.Forces.NetRotationDeg) > 0.001 {
+			c.TargetAngleDeg += c.Forces.NetRotationDeg
+			for c.TargetAngleDeg >= 360.0 {
+				c.TargetAngleDeg -= 360.0
+			}
+			for c.TargetAngleDeg < 0.0 {
+				c.TargetAngleDeg += 360.0
+			}
+		}
 
 		// Smooth angle rotation toward target angle
 		angleDiff := c.TargetAngleDeg - c.AngleDeg
@@ -439,7 +453,7 @@ func (r *Room) Tick() {
 			angleDiff += 360
 		}
 
-		turnRate := math.Max(2.0, math.Min(12.0, 5.0+math.Abs(c.Forces.NetRotationDeg)*0.15))
+		turnRate := math.Max(2.0, math.Min(15.0, 5.0+math.Abs(c.Forces.NetRotationDeg)*0.15))
 		if c.State == "dashing" {
 			turnRate *= 1.4
 		}

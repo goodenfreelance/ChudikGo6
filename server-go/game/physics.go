@@ -326,15 +326,10 @@ func CalculatePhysicsForces(elements []CreatureElement, muscleActiveStep int) Ph
 
 	isLighterSideRotating := totalLeftMass != totalRightMass && netTorque != 0
 
-	// Spec: v_forward = 0.25 base; balanced part -> forward, difference -> rotation
+	// Spec 3.3: v_forward = 0.25 base per contraction/extension phase when active muscles present; 0 without active muscles
 	forwardSpeed := 0.0
-	if motionActiveMusclesCount > 0 || sumLeftTorque > 0 || sumRightTorque > 0 {
-		balanced := math.Min(sumLeftTorque, sumRightTorque)
-		if balanced > 0 {
-			forwardSpeed = math.Min(0.25, 0.12+balanced*0.06)
-		} else {
-			forwardSpeed = 0.08
-		}
+	if motionActiveMusclesCount > 0 || totalActiveMusclesCount > 0 || sumLeftTorque > 0 || sumRightTorque > 0 {
+		forwardSpeed = 0.25
 	}
 
 	return PhysicsForces{

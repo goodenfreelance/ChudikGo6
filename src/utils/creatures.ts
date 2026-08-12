@@ -741,7 +741,7 @@ export interface CreatureCollisionResult {
   maxImpulse: number;
 }
 
-// Физический расчет столкновений чудиков с радиусом детали = 0.5 клетки и сохранением импульса (p = m*v)
+// Физический расчет столкновений чудиков с учетом масс, момента инерции, отдачи и углового кручения
 export function resolveCreatureCollisions(creatures: Creature[]): CreatureCollisionResult {
   if (creatures.length < 2) {
     return { creatures, hasCollided: false, maxImpulse: 0 };
@@ -813,6 +813,8 @@ export function resolveCreatureCollisions(creatures: Creature[]): CreatureCollis
 
       const mA = Math.max(0.5, cA.forces?.totalMass || cA.elements.length * 1.2);
       const mB = Math.max(0.5, cB.forces?.totalMass || cB.elements.length * 1.2);
+      const iA = Math.max(1, cA.forces?.totalInertia || mA * Math.pow(rA, 2) * 0.5);
+      const iB = Math.max(1, cB.forces?.totalInertia || mB * Math.pow(rB, 2) * 0.5);
 
       // 1. Позиционное разделение при перекрытии (устраняет вклинивание деталей)
       const overlap = touchDist - minElDist;
@@ -826,7 +828,13 @@ export function resolveCreatureCollisions(creatures: Creature[]): CreatureCollis
         cB.y += ny * pushB;
       }
 
-      // 2. Определение физических скоростей движения
+      // 2. Векторы относительно центров масс
+      const rxA = contactPtA.x - cA.x;
+      const ryA = contactPtA.y - cA.y;
+      const rxB = contactPtB.x - cB.x;
+      const ryB = contactPtB.y - cB.y;
+
+      // 3. Определение физических скоростей движения
       const speedA = (cA.forces?.forwardSpeed ?? 0.3) * 0.35;
       const speedB = (cB.forces?.forwardSpeed ?? 0.3) * 0.35;
 
@@ -844,42 +852,59 @@ export function resolveCreatureCollisions(creatures: Creature[]): CreatureCollis
       const vBn = vBx * nx + vBy * ny;
 
       // Относительная скорость сближения
-      const vRel = vAn - vBn;
+      const vRelN = vAn - vBn;
 
-      // Импульсный обмен происходит только при сближении (vRel > 0)
-      if (vRel > 0) {
-        const restitution = 0.5; // Коэффициент упругости
-        const impulse = ((1 + restitution) * vRel) / (1 / mA + 1 / mB);
+      // Импульсный обмен происходит только при сближении (vRelN > 0)
+      if (vRelN > 0) {
+        const restitution = 0.55; // Коэффициент упругости
+        const frictionCoef = 0.35; // Трение при касательных ударах
 
-        if (impulse > maxImpulse) maxImpulse = impulse;
+        // Момент инерции вдоль нормали (r x n)
+        const rnA = rxA * ny - ryA * nx;
+        const rnB = rxB * ny - ryB * nx;
+        const kn = 1 / mA + 1 / mB + (rnA * rnA) / iA + (rnB * rnB) / iB;
+
+        const impulseN = ((1 + restitution) * vRelN) / kn;
+        if (impulseN > maxImpulse) maxImpulse = impulseN;
+
+        // Касательное трение (вращательное скольжение)
+        const tx = -ny;
+        const ty = nx;
+        const vAt = vAx * tx + vAy * ty;
+        const vBt = vBx * tx + vBy * ty;
+        const vRelT = vAt - vBt;
+
+        const rtA = rxA * ty - ryA * tx;
+        const rtB = rxB * ty - ryB * tx;
+        const kt = 1 / mA + 1 / mB + (rtA * rtA) / iA + (rtB * rtB) / iB;
+
+        const maxFriction = frictionCoef * impulseN;
+        const impulseT = Math.max(-maxFriction, Math.min(maxFriction, vRelT / kt));
+
+        // Векторы импульсов сил: на A (-J), на B (+J)
+        const jAx = -(impulseN * nx + impulseT * tx);
+        const jAy = -(impulseN * ny + impulseT * ty);
+        const jBx = +(impulseN * nx + impulseT * tx);
+        const jBy = +(impulseN * ny + impulseT * ty);
+
+        // Линейная отдача после удара (пропорциональна обратному весу)
+        const recoilFactor = 0.45;
+        cA.x += (jAx / mA) * recoilFactor;
+        cA.y += (jAy / mA) * recoilFactor;
+        cB.x += (jBx / mB) * recoilFactor;
+        cB.y += (jBy / mB) * recoilFactor;
 
         // Вращательные моменты (Torque) от удара относительно центров масс
-        const rxA = contactPtA.x - cA.x;
-        const ryA = contactPtA.y - cA.y;
-        const rxB = contactPtB.x - cB.x;
-        const ryB = contactPtB.y - cB.y;
-
-        // Векторы импульсов сил: на A действует (-impulse * n), на B (+impulse * n)
-        const jAx = -impulse * nx;
-        const jAy = -impulse * ny;
-        const jBx = +impulse * nx;
-        const jBy = +impulse * ny;
-
-        // Крутящий момент τ = r_x * J_y - r_y * J_x
         const torqueA = rxA * jAy - ryA * jAx;
         const torqueB = rxB * jBy - ryB * jBx;
 
-        // Моменты инерции чудиков
-        const iA = Math.max(1, cA.forces?.totalInertia || mA * Math.pow(rA, 2) * 0.5);
-        const iB = Math.max(1, cB.forces?.totalInertia || mB * Math.pow(rB, 2) * 0.5);
+        // Поворот угла тела, пропорциональный крутящему моменту (torque) и обратному моменту инерции (I)
+        const dAngleA = (torqueA / iA) * (180 / Math.PI) * 1.25;
+        const dAngleB = (torqueB / iB) * (180 / Math.PI) * 1.25;
 
-        // Поворот угла тела, пропорциональный крутящему моменту (torque)
-        const dAngleA = (torqueA / iA) * (180 / Math.PI) * 1.2;
-        const dAngleB = (torqueB / iB) * (180 / Math.PI) * 1.2;
-
-        // Ограничиваем максимальный поворот от одного столкновения (не более 25°)
-        const clampedDA = Math.max(-25, Math.min(25, dAngleA));
-        const clampedDB = Math.max(-25, Math.min(25, dAngleB));
+        // Ограничиваем максимальный поворот от одного столкновения (не более 30°)
+        const clampedDA = Math.max(-30, Math.min(30, dAngleA));
+        const clampedDB = Math.max(-30, Math.min(30, dAngleB));
 
         cA.angleDeg = (cA.angleDeg + clampedDA + 360) % 360;
         cB.angleDeg = (cB.angleDeg + clampedDB + 360) % 360;
@@ -888,4 +913,208 @@ export function resolveCreatureCollisions(creatures: Creature[]): CreatureCollis
   }
 
   return { creatures: list, hasCollided, maxImpulse };
+}
+
+// Разделение элементов на связные компоненты связного графа (соседство по сетке: max(|dx|,|dy|) <= 1)
+export function findConnectedComponents(elements: CreatureElement[]): CreatureElement[][] {
+  const n = elements.length;
+  if (n === 0) return [];
+
+  const visited = new Array(n).fill(false);
+  const components: CreatureElement[][] = [];
+
+  for (let i = 0; i < n; i++) {
+    if (visited[i]) continue;
+
+    const comp: CreatureElement[] = [];
+    const queue = [i];
+    visited[i] = true;
+
+    while (queue.length > 0) {
+      const currIdx = queue.shift()!;
+      const currEl = elements[currIdx];
+      comp.push(currEl);
+
+      for (let j = 0; j < n; j++) {
+        if (visited[j]) continue;
+        const otherEl = elements[j];
+        const dx = Math.abs(currEl.relX - otherEl.relX);
+        const dy = Math.abs(currEl.relY - otherEl.relY);
+        if (dx <= 1.05 && dy <= 1.05) {
+          visited[j] = true;
+          queue.push(j);
+        }
+      }
+    }
+    components.push(comp);
+  }
+
+  return components;
+}
+
+// Выбор выжившего фрагмента: максимум голов > наибольшая масса > случайный выбор
+export function selectWinningComponent(components: CreatureElement[][]): CreatureElement[] {
+  if (components.length === 0) return [];
+  if (components.length === 1) return components[0];
+
+  const stats = components.map((comp) => {
+    let headCount = 0;
+    let totalMass = 0;
+    for (const el of comp) {
+      if (el.type === 'head') {
+        headCount++;
+        totalMass += 0.5;
+      } else if (el.type === 'joint') {
+        totalMass += 1.0;
+      } else if (el.type.startsWith('edge-')) {
+        totalMass += 1.0;
+      } else if (el.type.startsWith('muscle-')) {
+        totalMass += 0.3;
+      } else {
+        totalMass += 0.5;
+      }
+    }
+    return { comp, headCount, totalMass };
+  });
+
+  const maxHeads = Math.max(...stats.map((s) => s.headCount));
+  const headCandidates = stats.filter((s) => s.headCount === maxHeads);
+
+  if (headCandidates.length === 1) {
+    return headCandidates[0].comp;
+  }
+
+  const maxMass = Math.max(...headCandidates.map((s) => s.totalMass));
+  const massCandidates = headCandidates.filter((s) => Math.abs(s.totalMass - maxMass) < 1e-4);
+
+  if (massCandidates.length === 1) {
+    return massCandidates[0].comp;
+  }
+
+  const rndIdx = Math.floor(Math.random() * massCandidates.length);
+  return massCandidates[rndIdx].comp;
+}
+
+// Укусы чудиков: укушенный чудик теряет элемент/мышцу, может разрываться на части и пересчитывает физику
+export function resolveCreatureBites(creatures: Creature[]): { creatures: Creature[]; hasBitten: boolean } {
+  if (creatures.length < 2) {
+    return { creatures, hasBitten: false };
+  }
+
+  const biteTouchDist = 1.15;
+  let hasBitten = false;
+
+  interface BiteEvent {
+    biterId: string;
+    targetId: string;
+    targetElemIdx: number;
+  }
+
+  const biteEvents: BiteEvent[] = [];
+
+  for (let i = 0; i < creatures.length; i++) {
+    const cA = creatures[i];
+    const ptsA = getCreatureElementWorldPositions(cA.x, cA.y, cA.angleDeg, cA.elements);
+    const headWorldPts: Point[] = [];
+
+    cA.elements.forEach((el, idx) => {
+      if (el.type === 'head') {
+        if (idx + 1 < ptsA.length) {
+          headWorldPts.push(ptsA[idx + 1]);
+        }
+      }
+    });
+
+    if (headWorldPts.length === 0) continue;
+
+    for (let j = 0; j < creatures.length; j++) {
+      if (i === j) continue;
+      const cB = creatures[j];
+
+      const rA = calculateCreatureRadius(cA.elements);
+      const rB = calculateCreatureRadius(cB.elements);
+      const centerDist = Math.hypot(cB.x - cA.x, cB.y - cA.y);
+      if (centerDist > rA + rB + 2.0) continue;
+
+      const ptsB = getCreatureElementWorldPositions(cB.x, cB.y, cB.angleDeg, cB.elements);
+
+      let bitten = false;
+      for (const hPt of headWorldPts) {
+        if (bitten) break;
+        for (let elIdx = 0; elIdx < cB.elements.length; elIdx++) {
+          if (elIdx + 1 >= ptsB.length) continue;
+          const bPt = ptsB[elIdx + 1];
+
+          let dx = bPt.x - hPt.x;
+          if (dx > 50) dx -= 100;
+          else if (dx < -50) dx += 100;
+
+          let dy = bPt.y - hPt.y;
+          if (dy > 50) dy -= 100;
+          else if (dy < -50) dy += 100;
+
+          if (Math.hypot(dx, dy) <= biteTouchDist) {
+            biteEvents.push({
+              biterId: cA.id,
+              targetId: cB.id,
+              targetElemIdx: elIdx,
+            });
+            bitten = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  const creatureMap = new Map<string, Creature>(creatures.map((c) => [c.id, c]));
+
+  for (const bEvent of biteEvents) {
+    const cA = creatureMap.get(bEvent.biterId);
+    const cB = creatureMap.get(bEvent.targetId);
+    if (!cA || !cB) continue;
+    if (bEvent.targetElemIdx >= cB.elements.length) continue;
+
+    const targetEl = cB.elements[bEvent.targetElemIdx];
+    let removeIdx = -1;
+
+    if (targetEl.type === 'joint') {
+      const muscleIdx = cB.elements.findIndex((el) => {
+        if (el.type.startsWith('muscle-')) {
+          const dx = Math.abs(el.relX - targetEl.relX);
+          const dy = Math.abs(el.relY - targetEl.relY);
+          return dx <= 1.05 && dy <= 1.05;
+        }
+        return false;
+      });
+
+      if (muscleIdx !== -1) {
+        removeIdx = muscleIdx;
+      } else {
+        removeIdx = bEvent.targetElemIdx;
+      }
+    } else {
+      removeIdx = bEvent.targetElemIdx;
+    }
+
+    if (removeIdx >= 0 && removeIdx < cB.elements.length) {
+      hasBitten = true;
+      const remainingEls = cB.elements.filter((_, idx) => idx !== removeIdx);
+
+      const comps = findConnectedComponents(remainingEls);
+      const winningComp = selectWinningComponent(comps);
+
+      cB.elements = winningComp;
+
+      if (cB.elements.length === 0) {
+        creatureMap.delete(cB.id);
+        cA.foodEaten = (cA.foodEaten || 0) + 5;
+      } else {
+        cB.forces = calculatePhysicsForces(cB.elements, cB.muscleStep || 0);
+        cA.foodEaten = (cA.foodEaten || 0) + 1;
+      }
+    }
+  }
+
+  return { creatures: Array.from(creatureMap.values()), hasBitten };
 }

@@ -522,6 +522,9 @@ func (r *Room) Tick() {
 	// 5. Resolve creature collisions — Newtonian physics (spec sections 4-5)
 	ResolveCreatureCollisions(r.creatures)
 
+	// 6. Resolve creature head bites!
+	ResolveCreatureBites(r.creatures)
+
 	// 7. Build leaderboard + stats
 	leaderboard := r.buildLeaderboard()
 
